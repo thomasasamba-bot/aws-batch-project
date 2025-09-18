@@ -39,6 +39,10 @@ jobs:
       run: terraform init
       working-directory: ${{ env.TERRAFORM_DIR }}
 
+    - name: Terraform Validate
+      run: terraform validate
+      working-directory: ${{ env.TERRAFORM_DIR }}
+
     - name: Terraform Plan
       run: terraform plan -input=false -var="s3_audit_bucket_name=${{ secrets.TF_VAR_s3_audit_bucket_name }}"
       working-directory: ${{ env.TERRAFORM_DIR }}
@@ -47,39 +51,51 @@ jobs:
       run: terraform apply -auto-approve -input=false -var="s3_audit_bucket_name=${{ secrets.TF_VAR_s3_audit_bucket_name }}"
       working-directory: ${{ env.TERRAFORM_DIR }}
 
-    - name: Check Terraform Outputs (Debug)
-      run: terraform output
-      working-directory: ${{ env.TERRAFORM_DIR }}
+    # DEBUGGING: Check if apply was successful
+    - name: Check Terraform State
+      run: |
+        cd ${{ env.TERRAFORM_DIR }}
+        echo "=== Terraform State List ==="
+        terraform state list || echo "No state found"
+        echo "=== Terraform Outputs ==="
+        terraform output || echo "No outputs found"
+        echo "=== Terraform Show ==="
+        terraform show || echo "Show failed"
 
-    # Now we need to set up AWS credentials again for the subsequent steps
-    # because each step runs in a fresh shell environment
+    # Only proceed if Terraform was successful
     - name: Configure AWS credentials for ECR
+      if: success()
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
         aws-region: ${{ env.AWS_REGION }}
 
     - name: Get ECR Repository URI
+      if: success()
       id: ecr-repo
       run: |
         cd ${{ env.TERRAFORM_DIR }}
         echo "repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
 
     - name: Login to Amazon ECR
+      if: success()
       uses: aws-actions/amazon-ecr-login@v2
 
     - name: Build, Tag, and Push Docker image
+      if: success()
       run: |
         docker build -t ${{ steps.ecr-repo.outputs.repository_url }}:latest .
         docker push ${{ steps.ecr-repo.outputs.repository_url }}:latest
 
     - name: Configure AWS credentials for Batch
+      if: success()
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
         aws-region: ${{ env.AWS_REGION }}
 
     - name: Submit Test Job to AWS Batch
+      if: success()
       run: |
         cd ${{ env.TERRAFORM_DIR }}
         JOB_DEFINITION=$(terraform output -raw batch_job_definition_name)
