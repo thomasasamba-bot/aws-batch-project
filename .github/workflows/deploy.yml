@@ -16,7 +16,6 @@ env:
   AWS_REGION: us-east-1
   TERRAFORM_DIR: './terraform'
   ECR_REPOSITORY: 'aws-batch-auditor-repo'
-  TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_s3_audit_bucket_name }}
 
 jobs:
   # TEST STAGE - Runs on PRs and pushes to main
@@ -85,6 +84,9 @@ jobs:
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+        # Ensure that AWS_OIDC_ROLE_ARN is set in your repository or organization secrets:
+        # GitHub UI > Settings > Secrets and variables > Actions > New repository secret
+        # Name: AWS_OIDC_ROLE_ARN, Value: arn:aws:iam::<account-id>:role/<role-name>
         aws-region: ${{ env.AWS_REGION }}
         role-session-name: GitHubActions-Deploy
 
@@ -96,15 +98,20 @@ jobs:
     - name: Terraform Init
       run: terraform init
       working-directory: ${{ env.TERRAFORM_DIR }}
+      env:
+        TF_VAR_S3_AUDIT_BUCKET_NAME: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
 
     - name: Terraform Plan
       run: terraform plan -input=false
       working-directory: ${{ env.TERRAFORM_DIR }}
+      env:
+        TF_VAR_S3_AUDIT_BUCKET_NAME: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
 
     - name: Terraform Apply
       run: terraform apply -auto-approve -input=false
       working-directory: ${{ env.TERRAFORM_DIR }}
-
+      env:
+        TF_VAR_S3_AUDIT_BUCKET_NAME: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
     - name: Get ECR Repository URI
       id: ecr-repo
       run: |
