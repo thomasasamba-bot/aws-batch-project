@@ -18,6 +18,8 @@ env:
   AWS_REGION: us-east-1
   TERRAFORM_DIR: './terraform'
   ECR_REPOSITORY: 'aws-batch-auditor-repo' # Must match the name in Terraform
+  TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_s3_audit_bucket_name }}
+
 
 jobs:
   deploy:
