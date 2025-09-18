@@ -16,7 +16,7 @@ env:
   AWS_REGION: us-east-1
   TERRAFORM_DIR: './terraform'
   ECR_REPOSITORY: 'aws-batch-auditor-repo'
-  TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME}}
+  TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_s3_audit_bucket_name }}
 
 jobs:
   # TEST STAGE - Runs on PRs and pushes to main
@@ -33,12 +33,15 @@ jobs:
       with:
         python-version: '3.9'
 
-    - name: Install dependencies
+    - name: Install production dependencies
       run: |
         cd src
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install -r ../tests/requirements-dev.txt
+
+    - name: Install test dependencies
+      run: |
+        pip install pytest==7.4.0 pytest-cov==4.1.0 flake8==6.0.0 moto==4.1.6
 
     - name: Run unit tests with coverage
       run: |
@@ -81,7 +84,7 @@ jobs:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN}}
+        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
         aws-region: ${{ env.AWS_REGION }}
         role-session-name: GitHubActions-Deploy
 
@@ -122,12 +125,13 @@ jobs:
       run: |
         JOB_DEFINITION=$(terraform output -raw batch_job_definition_name)
         JOB_QUEUE=$(terraform output -raw batch_job_queue_name)
+        S3_BUCKET=$(terraform output -raw s3_bucket_name)
         aws batch submit-job \
           --job-name "test-job-${GITHUB_SHA:0:8}" \
           --job-queue $JOB_QUEUE \
           --job-definition $JOB_DEFINITION \
           --region ${{ env.AWS_REGION }} \
-          --container-overrides '{"environment": [{"name": "S3_BUCKET_NAME", "value": "${{ env.TF_VAR_s3_audit_bucket_name }}"}]}'
+          --container-overrides '{"environment": [{"name": "S3_BUCKET_NAME", "value": "'"$S3_BUCKET"'"}]}'
       continue-on-error: true
 
     - name: Verify test job status
