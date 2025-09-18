@@ -1,0 +1,72 @@
+name: Deploy AWS Batch Audit Infrastructure
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_IAM_ROLE }}
+        aws-region: ${{ vars.AWS_REGION }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install CDK dependencies
+      run: |
+        cd infra
+        pip install -r requirements.txt
+
+    - name: Synthesize CDK stack
+      run: |
+        cd infra
+        cdk synth
+
+    - name: Deploy CDK stack
+      run: |
+        cd infra
+        cdk deploy --require-approval never
+
+    - name: Build and push Docker image
+      run: |
+        # Get ECR repository URI from CDK output
+        ECR_REPO=$(aws cloudformation describe-stacks \
+          --stack-name AWSBatchAuditStack \
+          --query "Stacks[0].Outputs[?OutputKey=='EcrRepoUri'].OutputValue" \
+          --output text)
+        
+        # Build and push to ECR
+        aws ecr get-login-password --region ${{ vars.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REPO
+        docker build -t $ECR_REPO:latest .
+        docker push $ECR_REPO:latest
+
+        # Update Batch job definition with new image
+        aws batch register-job-definition \
+          --job-definition-name aws-audit-job \
+          --type container \
+          --container-properties '{
+            "image": "'$ECR_REPO':latest",
+            "vcpus": 1,
+            "memory": 2048,
+            "environment": [
+              {"name": "S3_BUCKET_NAME", "value": "'$(aws cloudformation describe-stacks --stack-name AWSBatchAuditStack --query "Stacks[0].Outputs[?OutputKey=='AuditBucketName'].OutputValue" --output text)'"}
+            ],
+            "jobRoleArn": "'$(aws batch describe-job-definitions --job-definition-name aws-audit-job --status ACTIVE --query 'jobDefinitions[0].containerProperties.jobRoleArn' --output text)'"
+          }'
