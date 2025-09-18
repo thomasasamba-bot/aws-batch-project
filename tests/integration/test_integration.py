@@ -5,11 +5,13 @@ import sys
 import pytest
 from unittest.mock import patch
 
-# Add the src directory to Python path so we can import main
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+
+# Add the project root directory to Python path
+project_root = os.path.join(os.path.dirname(__file__), '../..')
+sys.path.insert(0, project_root)
 
 # Now we can import from main
-from main import get_ec2_instances, upload_to_s3, analyze_own_logs
+from src.main import get_ec2_instances, upload_to_s3, analyze_own_logs
 
 def test_get_ec2_instances(ec2_client):
     """Test getting EC2 instances with mocked AWS."""

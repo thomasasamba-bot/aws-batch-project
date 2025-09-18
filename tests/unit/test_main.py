@@ -6,8 +6,9 @@ import os
 import sys
 from unittest.mock import Mock, patch
 
-# Add the src directory to Python path so we can import main
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+# Add the project root directory to Python path
+project_root = os.path.join(os.path.dirname(__file__), '../..')
+sys.path.insert(0, project_root)
 
 # Now we can import from main
 from src.main import check_security_groups, check_instance_utilization, generate_audit_report
