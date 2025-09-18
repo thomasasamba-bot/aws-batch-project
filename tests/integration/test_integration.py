@@ -1,9 +1,15 @@
 """Integration tests for the AWS Resource Auditor."""
 import json
+import os
+import sys
 import pytest
 from unittest.mock import patch
 
-from src.main import get_ec2_instances, upload_to_s3, analyze_own_logs
+# Add the src directory to Python path so we can import main
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+
+# Now we can import from main
+from main import get_ec2_instances, upload_to_s3, analyze_own_logs
 
 def test_get_ec2_instances(ec2_client):
     """Test getting EC2 instances with mocked AWS."""
@@ -51,7 +57,7 @@ def test_analyze_own_logs(logs_client):
         ]
     )
     
-    with patch('src.main.os.getenv') as mock_getenv:
+    with patch('main.os.getenv') as mock_getenv:
         mock_getenv.return_value = log_group_name
         analysis = analyze_own_logs(logs_client, 'test-job-id')
         

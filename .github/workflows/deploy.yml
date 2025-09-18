@@ -12,6 +12,7 @@ permissions:
   id-token: write
   contents: read
 
+# Environment variables used across the workflow
 env:
   AWS_REGION: us-east-1
   TERRAFORM_DIR: './terraform'
@@ -30,7 +31,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
+        python-version: '3.11'  # Match your Dockerfile Python version
 
     - name: Install production dependencies
       run: |
@@ -45,12 +46,12 @@ jobs:
     - name: Run unit tests with coverage
       run: |
         cd tests/unit
-        python -m pytest test_main.py -v --cov=../../src --cov-report=xml
+        PYTHONPATH=../../src python -m pytest test_main.py -v --cov=src --cov-report=xml
 
     - name: Run integration tests
       run: |
         cd tests/integration
-        python -m pytest test_integration.py -v
+        PYTHONPATH=../../src python -m pytest test_integration.py -v
 
     - name: Upload coverage reports
       uses: codecov/codecov-action@v3
@@ -76,6 +77,10 @@ jobs:
     environment: production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
+    # Set environment variables for this job
+    env:
+      TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -84,9 +89,6 @@ jobs:
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
-        # Ensure that AWS_OIDC_ROLE_ARN is set in your repository or organization secrets:
-        # GitHub UI > Settings > Secrets and variables > Actions > New repository secret
-        # Name: AWS_OIDC_ROLE_ARN, Value: arn:aws:iam::<account-id>:role/<role-name>
         aws-region: ${{ env.AWS_REGION }}
         role-session-name: GitHubActions-Deploy
 
@@ -98,24 +100,22 @@ jobs:
     - name: Terraform Init
       run: terraform init
       working-directory: ${{ env.TERRAFORM_DIR }}
-      env:
-        TF_VAR_S3_AUDIT_BUCKET_NAME: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
 
     - name: Terraform Plan
       run: terraform plan -input=false
       working-directory: ${{ env.TERRAFORM_DIR }}
-      env:
-        TF_VAR_S3_AUDIT_BUCKET_NAME: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
 
     - name: Terraform Apply
       run: terraform apply -auto-approve -input=false
       working-directory: ${{ env.TERRAFORM_DIR }}
-      env:
-        TF_VAR_S3_AUDIT_BUCKET_NAME: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
-    - name: Get ECR Repository URI
-      id: ecr-repo
+
+    - name: Get Terraform outputs
+      id: terraform-outputs
       run: |
         echo "repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+        echo "batch_job_definition=$(terraform output -raw batch_job_definition_name)" >> $GITHUB_OUTPUT
+        echo "batch_job_queue=$(terraform output -raw batch_job_queue_name)" >> $GITHUB_OUTPUT
+        echo "s3_bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
       working-directory: ${{ env.TERRAFORM_DIR }}
 
     - name: Login to Amazon ECR
@@ -123,22 +123,19 @@ jobs:
 
     - name: Build, Tag, and Push Docker image
       run: |
-        docker build -t ${{ steps.ecr-repo.outputs.repository_url }}:latest .
-        docker tag ${{ steps.ecr-repo.outputs.repository_url }}:latest ${{ steps.ecr-repo.outputs.repository_url }}:${{ github.sha }}
-        docker push ${{ steps.ecr-repo.outputs.repository_url }}:latest
-        docker push ${{ steps.ecr-repo.outputs.repository_url }}:${{ github.sha }}
+        docker build -t ${{ steps.terraform-outputs.outputs.repository_url }}:latest .
+        docker tag ${{ steps.terraform-outputs.outputs.repository_url }}:latest ${{ steps.terraform-outputs.outputs.repository_url }}:${{ github.sha }}
+        docker push ${{ steps.terraform-outputs.outputs.repository_url }}:latest
+        docker push ${{ steps.terraform-outputs.outputs.repository_url }}:${{ github.sha }}
 
     - name: Submit Test Job to AWS Batch
       run: |
-        JOB_DEFINITION=$(terraform output -raw batch_job_definition_name)
-        JOB_QUEUE=$(terraform output -raw batch_job_queue_name)
-        S3_BUCKET=$(terraform output -raw s3_bucket_name)
         aws batch submit-job \
           --job-name "test-job-${GITHUB_SHA:0:8}" \
-          --job-queue $JOB_QUEUE \
-          --job-definition $JOB_DEFINITION \
+          --job-queue "${{ steps.terraform-outputs.outputs.batch_job_queue }}" \
+          --job-definition "${{ steps.terraform-outputs.outputs.batch_job_definition }}" \
           --region ${{ env.AWS_REGION }} \
-          --container-overrides '{"environment": [{"name": "S3_BUCKET_NAME", "value": "'"$S3_BUCKET"'"}]}'
+          --container-overrides '{"environment": [{"name": "S3_BUCKET_NAME", "value": "${{ steps.terraform-outputs.outputs.s3_bucket }}"}]}'
       continue-on-error: true
 
     - name: Verify test job status

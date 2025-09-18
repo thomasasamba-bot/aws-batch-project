@@ -6,10 +6,11 @@ import os
 import sys
 from unittest.mock import Mock, patch
 
-# Add src to path
+# Add the src directory to Python path so we can import main
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
-from main import check_security_groups, check_instance_utilization, generate_audit_report
+# Now we can import from main
+from src.main import check_security_groups, check_instance_utilization, generate_audit_report
 
 def test_check_security_groups():
     """Test security group checking logic."""
