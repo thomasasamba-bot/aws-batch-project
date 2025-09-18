@@ -1,72 +1,88 @@
-name: Deploy AWS Batch Audit Infrastructure
+# .github/workflows/deploy.yml
+name: Deploy to AWS Batch
 
+# Controls when the workflow will run
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
+  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+# Set permissions for the GITHUB_TOKEN (needed for GitHub OIDC later)
 permissions:
   id-token: write
   contents: read
 
+# Environment variables used across the workflow
+env:
+  AWS_REGION: us-east-1
+  TERRAFORM_DIR: './terraform'
+  ECR_REPOSITORY: 'aws-batch-auditor-repo' # Must match the name in Terraform
+
 jobs:
   deploy:
+    name: Deploy Infrastructure & Container
     runs-on: ubuntu-latest
-    environment: production
+    environment: production # Creates a deployment environment in GitHub
 
     steps:
+    # Step 1: Checkout the repository code
     - name: Checkout code
       uses: actions/checkout@v4
 
+    # Step 2: Configure AWS credentials
+    # This is the SECURE way to authenticate using OIDC (Recommended)
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: ${{ secrets.AWS_IAM_ROLE }}
-        aws-region: ${{ vars.AWS_REGION }}
+        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }} # See setup instructions below
+        aws-region: ${{ env.AWS_REGION }}
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    # Step 3: Set up Terraform
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
       with:
-        python-version: '3.11'
+        terraform_version: 1.6.0
 
-    - name: Install CDK dependencies
+    # Step 4: Initialize Terraform
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ${{ env.TERRAFORM_DIR }}
+
+    # Step 5: Plan the Terraform deployment (optional but good practice)
+    - name: Terraform Plan
+      run: terraform plan -input=false
+      working-directory: ${{ env.TERRAFORM_DIR }}
+
+    # Step 6: Apply the Terraform configuration (deploys S3, ECR, IAM, Batch)
+    - name: Terraform Apply
+      run: terraform apply -auto-approve -input=false
+      working-directory: ${{ env.TERRAFORM_DIR }}
+
+    # Step 7: Get the ECR Repository URI from Terraform output
+    - name: Get ECR Repository URI
+      id: ecr-repo
       run: |
-        cd infra
-        pip install -r requirements.txt
+        echo "repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+      working-directory: ${{ env.TERRAFORM_DIR }}
 
-    - name: Synthesize CDK stack
+    # Step 8: Log in to Amazon ECR
+    - name: Login to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    # Step 9: Build, tag, and push the Docker image to ECR
+    - name: Build, Tag, and Push Docker image
       run: |
-        cd infra
-        cdk synth
+        docker build -t ${{ steps.ecr-repo.outputs.repository_url }}:latest .
+        docker push ${{ steps.ecr-repo.outputs.repository_url }}:latest
 
-    - name: Deploy CDK stack
+    # Step 10: Submit a test job to AWS Batch
+    - name: Submit Test Job to AWS Batch
       run: |
-        cd infra
-        cdk deploy --require-approval never
-
-    - name: Build and push Docker image
-      run: |
-        # Get ECR repository URI from CDK output
-        ECR_REPO=$(aws cloudformation describe-stacks \
-          --stack-name AWSBatchAuditStack \
-          --query "Stacks[0].Outputs[?OutputKey=='EcrRepoUri'].OutputValue" \
-          --output text)
-        
-        # Build and push to ECR
-        aws ecr get-login-password --region ${{ vars.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REPO
-        docker build -t $ECR_REPO:latest .
-        docker push $ECR_REPO:latest
-
-        # Update Batch job definition with new image
-        aws batch register-job-definition \
-          --job-definition-name aws-audit-job \
-          --type container \
-          --container-properties '{
-            "image": "'$ECR_REPO':latest",
-            "vcpus": 1,
-            "memory": 2048,
-            "environment": [
-              {"name": "S3_BUCKET_NAME", "value": "'$(aws cloudformation describe-stacks --stack-name AWSBatchAuditStack --query "Stacks[0].Outputs[?OutputKey=='AuditBucketName'].OutputValue" --output text)'"}
-            ],
-            "jobRoleArn": "'$(aws batch describe-job-definitions --job-definition-name aws-audit-job --status ACTIVE --query 'jobDefinitions[0].containerProperties.jobRoleArn' --output text)'"
-          }'
+        JOB_DEFINITION=$(terraform output -raw batch_job_definition_name)
+        JOB_QUEUE=$(terraform output -raw batch_job_queue_name)
+        aws batch submit-job \
+          --job-name "test-job-${GITHUB_SHA:0:8}" \
+          --job-queue $JOB_QUEUE \
+          --job-definition $JOB_DEFINITION \
+          --region ${{ env.AWS_REGION }}
