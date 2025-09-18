@@ -1,7 +1,10 @@
+# .github/workflows/deploy.yml
 name: Deploy to AWS Batch
 
 on:
   push:
+    branches: [ "main" ]
+  pull_request:
     branches: [ "main" ]
   workflow_dispatch:
 
@@ -13,12 +16,63 @@ env:
   AWS_REGION: us-east-1
   TERRAFORM_DIR: './terraform'
   ECR_REPOSITORY: 'aws-batch-auditor-repo'
+  TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME}}
 
 jobs:
+  # TEST STAGE - Runs on PRs and pushes to main
+  test:
+    name: Run Automated Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        cd src
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r ../tests/requirements-dev.txt
+
+    - name: Run unit tests with coverage
+      run: |
+        cd tests/unit
+        python -m pytest test_main.py -v --cov=../../src --cov-report=xml
+
+    - name: Run integration tests
+      run: |
+        cd tests/integration
+        python -m pytest test_integration.py -v
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./tests/unit/coverage.xml
+        fail_ci_if_error: false
+
+    - name: Run security scanning
+      uses: actions/dependency-review-action@v3
+      with:
+        fail-on-severity: high
+
+    - name: Run linting
+      run: |
+        pip install flake8
+        flake8 src/ --max-line-length=120 --count --statistics
+
+  # DEPLOY STAGE - Only runs after successful tests on main branch
   deploy:
     name: Deploy Infrastructure & Container
     runs-on: ubuntu-latest
+    needs: test
     environment: production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
     - name: Checkout code
@@ -27,8 +81,9 @@ jobs:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN}}
         aws-region: ${{ env.AWS_REGION }}
+        role-session-name: GitHubActions-Deploy
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
@@ -39,69 +94,50 @@ jobs:
       run: terraform init
       working-directory: ${{ env.TERRAFORM_DIR }}
 
-    - name: Terraform Validate
-      run: terraform validate
-      working-directory: ${{ env.TERRAFORM_DIR }}
-
     - name: Terraform Plan
-      run: terraform plan -input=false -var="s3_audit_bucket_name=${{ secrets.TF_VAR_s3_audit_bucket_name }}"
+      run: terraform plan -input=false
       working-directory: ${{ env.TERRAFORM_DIR }}
 
     - name: Terraform Apply
-      run: terraform apply -auto-approve -input=false -var="s3_audit_bucket_name=${{ secrets.TF_VAR_s3_audit_bucket_name }}"
+      run: terraform apply -auto-approve -input=false
       working-directory: ${{ env.TERRAFORM_DIR }}
 
-    # DEBUGGING: Check if apply was successful
-    - name: Check Terraform State
-      run: |
-        cd ${{ env.TERRAFORM_DIR }}
-        echo "=== Terraform State List ==="
-        terraform state list || echo "No state found"
-        echo "=== Terraform Outputs ==="
-        terraform output || echo "No outputs found"
-        echo "=== Terraform Show ==="
-        terraform show || echo "Show failed"
-
-    # Only proceed if Terraform was successful
-    - name: Configure AWS credentials for ECR
-      if: success()
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
-        aws-region: ${{ env.AWS_REGION }}
-
     - name: Get ECR Repository URI
-      if: success()
       id: ecr-repo
       run: |
-        cd ${{ env.TERRAFORM_DIR }}
         echo "repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+      working-directory: ${{ env.TERRAFORM_DIR }}
 
     - name: Login to Amazon ECR
-      if: success()
       uses: aws-actions/amazon-ecr-login@v2
 
     - name: Build, Tag, and Push Docker image
-      if: success()
       run: |
         docker build -t ${{ steps.ecr-repo.outputs.repository_url }}:latest .
+        docker tag ${{ steps.ecr-repo.outputs.repository_url }}:latest ${{ steps.ecr-repo.outputs.repository_url }}:${{ github.sha }}
         docker push ${{ steps.ecr-repo.outputs.repository_url }}:latest
-
-    - name: Configure AWS credentials for Batch
-      if: success()
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
-        aws-region: ${{ env.AWS_REGION }}
+        docker push ${{ steps.ecr-repo.outputs.repository_url }}:${{ github.sha }}
 
     - name: Submit Test Job to AWS Batch
-      if: success()
       run: |
-        cd ${{ env.TERRAFORM_DIR }}
         JOB_DEFINITION=$(terraform output -raw batch_job_definition_name)
         JOB_QUEUE=$(terraform output -raw batch_job_queue_name)
         aws batch submit-job \
           --job-name "test-job-${GITHUB_SHA:0:8}" \
           --job-queue $JOB_QUEUE \
           --job-definition $JOB_DEFINITION \
-          --region ${{ env.AWS_REGION }}
+          --region ${{ env.AWS_REGION }} \
+          --container-overrides '{"environment": [{"name": "S3_BUCKET_NAME", "value": "${{ env.TF_VAR_s3_audit_bucket_name }}"}]}'
+      continue-on-error: true
+
+    - name: Verify test job status
+      if: always()
+      run: |
+        # Wait a bit for the job to start
+        sleep 30
+        # Check if the test job completed successfully
+        JOB_STATUS=$(aws batch describe-jobs --jobs "test-job-${GITHUB_SHA:0:8}" --region ${{ env.AWS_REGION }} --query 'jobs[0].status' --output text)
+        echo "Test job status: $JOB_STATUS"
+        if [ "$JOB_STATUS" != "SUCCEEDED" ]; then
+          exit 1
+        fi

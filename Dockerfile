@@ -11,9 +11,8 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Set environment variables for AWS
-# (AWS credentials will be provided via IAM role)
-#ENV AWS_DEFAULT_REGION=us-east-1
+# Make main.py executable
+RUN chmod +x main.py
 
 # Run the script when the container launches
 CMD ["python3", "src/main.py"]

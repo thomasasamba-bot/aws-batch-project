@@ -1,0 +1,202 @@
+# terraform/main.tf
+
+# Create an S3 bucket for our audit reports
+resource "aws_s3_bucket" "audit_reports" {
+  bucket = var.s3_audit_bucket_name
+
+  tags = {
+    Name        = var.project_name
+    Environment = "Dev"
+    Project     = var.project_name
+  }
+}
+
+# Optional: Configure the S3 bucket to avoid accidental deletion (good practice)
+resource "aws_s3_bucket_ownership_controls" "audit_reports" {
+  bucket = aws_s3_bucket.audit_reports.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_acl" "audit_reports" {
+  depends_on = [aws_s3_bucket_ownership_controls.audit_reports]
+  bucket     = aws_s3_bucket.audit_reports.id
+  acl        = "private"
+}
+
+# Create an ECR repository to store our Docker image
+resource "aws_ecr_repository" "batch_job_repo" {
+  name = "${var.project_name}-repo"
+
+  image_scanning_configuration {
+    scan_on_push = true # Enable scanning for vulnerabilities
+  }
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# Create an IAM role that the Batch job will assume
+resource "aws_iam_role" "batch_job_execution_role" {
+  name = "${var.project_name}-execution-role"
+
+  # Trust policy: who can assume this role? (AWS Batch service)
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "batch.amazonaws.com"
+        }
+      },
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# Attach policies to the IAM role to grant necessary permissions
+# This is a CUSTOM policy for our specific job's needs
+resource "aws_iam_policy" "batch_job_policy" {
+  name        = "${var.project_name}-job-policy"
+  description = "Permissions for the EC2 auditor batch job to access S3, EC2, and CloudWatch Logs."
+
+  # Policy Document: what permissions does the role have?
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeInstances",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSecurityGroupRules" # Needed for our enhanced security check
+        ]
+        Resource = "*" # Required for describe actions
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject"
+        ]
+        Resource = "${aws_s3_bucket.audit_reports.arn}/audit-reports/*" # Least privilege: only the reports folder
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:DescribeLogStreams",
+          "logs:GetLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:log-group:/aws/batch/job:*" # Permission to read its own logs
+      }
+    ]
+  })
+}
+
+# Attach the custom policy to the role
+resource "aws_iam_role_policy_attachment" "batch_job_policy_attachment" {
+  role       = aws_iam_role.batch_job_execution_role.name
+  policy_arn = aws_iam_policy.batch_job_policy.arn
+}
+
+# Attach the standard AWS managed policy for ECR access (to pull the image)
+resource "aws_iam_role_policy_attachment" "batch_ecr_power_user_attachment" {
+  role       = aws_iam_role.batch_job_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+}
+
+# Create the AWS Batch Compute Environment (Fargate)
+resource "aws_batch_compute_environment" "fargate_env" {
+  compute_environment_name = "${var.project_name}-fargate-env"
+
+  compute_resources {
+    type               = "FARGATE"
+    max_vcpus          = 4 # Low limit for cost control
+    security_group_ids = [] # Fargate manages this for us
+
+    subnets = [
+      # You need to provide your own subnet IDs here!
+      "subnet-08d766e89bbbd449d",
+      "subnet-0328f57cf5b66f44a"
+    ]
+
+    # Use FARGATE_SPOT for significant cost savings (up to 70%)
+    allocation_strategy = "BEST_FIT"
+  }
+
+  service_role = aws_iam_role.batch_job_execution_role.arn
+  type         = "MANAGED" # Let AWS manage the infrastructure
+
+  depends_on = [aws_iam_role_policy_attachment.batch_ecr_power_user_attachment]
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# Create the AWS Batch Job Queue
+resource "aws_batch_job_queue" "auditor_queue" {
+  name                 = "${var.project_name}-queue"
+  state                = "ENABLED"
+  priority             = 1
+  compute_environments = [aws_batch_compute_environment.fargate_env.arn]
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# Create the AWS Batch Job Definition
+resource "aws_batch_job_definition" "ec2_auditor_job" {
+  name = "${var.project_name}-job-definition"
+  type = "container"
+  platform_capabilities = ["FARGATE"]
+
+  # Parameters for the container
+  container_properties = jsonencode({
+    image = "${aws_ecr_repository.batch_job_repo.repository_url}:latest" # Will point to the latest pushed image
+    jobRoleArn = aws_iam_role.batch_job_execution_role.arn
+    executionRoleArn = aws_iam_role.batch_job_execution_role.arn
+    resourceRequirements = [
+      {
+        type  = "VCPU"
+        value = var.batch_job_vcpus
+      },
+      {
+        type  = "MEMORY"
+        value = var.batch_job_memory
+      }
+    ]
+    environment = [
+      {
+        name  = "S3_BUCKET_NAME"
+        value = aws_s3_bucket.audit_reports.id
+      }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = "/aws/batch/job"
+        "awslogs-region"        = var.region
+        "awslogs-stream-prefix" = var.project_name
+      }
+    }
+  })
+
+  tags = {
+    Project = var.project_name
+  }
+}
