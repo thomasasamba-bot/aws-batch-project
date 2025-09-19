@@ -27,6 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def get_aws_clients():
     """Initializes and returns AWS clients for the audit and for CloudWatch Logs."""
     region = os.getenv('AWS_REGION', 'us-east-1')
@@ -37,6 +38,7 @@ def get_aws_clients():
         boto3.client('s3', region_name=region),
         boto3.client('logs', region_name=region)  # For self-analysis
     )
+
 
 def get_ec2_instances(ec2_client):
     """Retrieve all EC2 instances in the region."""
@@ -55,6 +57,7 @@ def get_ec2_instances(ec2_client):
         logger.error(f"Error fetching EC2 instances: {e}")
         return []
 
+
 def check_security_groups(ec2_client, instance):
     """Check if instance has security groups allowing SSH/RDP from anywhere."""
     security_issues = []
@@ -69,7 +72,7 @@ def check_security_groups(ec2_client, instance):
 
             for rule in sg_response['SecurityGroupRules']:
                 if (rule.get('FromPort') in [22, 3389] and
-                    rule.get('IpProtocol') == 'tcp'):
+                        rule.get('IpProtocol') == 'tcp'):
                     if '0.0.0.0/0' in rule.get('CidrIpv4', ''):
                         security_issues.append({
                             'SecurityGroupId': sg_id,
@@ -81,6 +84,7 @@ def check_security_groups(ec2_client, instance):
             logger.error(f"Error checking security group {sg_id}: {e}")
 
     return security_issues
+
 
 def check_instance_utilization(instance):
     """Check if instance might be underutilized (simplified check)."""
@@ -109,6 +113,7 @@ def check_instance_utilization(instance):
         })
 
     return utilization_issues
+
 
 def generate_audit_report(ec2_client, instances):
     """Generate the core EC2 audit report."""
@@ -149,6 +154,7 @@ def generate_audit_report(ec2_client, instances):
 
     return report
 
+
 def upload_to_s3(s3_client, content, key_suffix, content_type, bucket_name):
     """Upload a report to S3."""
     try:
@@ -164,6 +170,7 @@ def upload_to_s3(s3_client, content, key_suffix, content_type, bucket_name):
     except ClientError as e:
         logger.error(f"Error uploading to S3: {e}")
         return None
+
 
 def analyze_own_logs(logs_client, job_id):
     """Fetches and analyzes the CloudWatch Logs for this job (self-analysis)."""
@@ -212,6 +219,7 @@ def analyze_own_logs(logs_client, job_id):
     except ClientError as e:
         logger.error(f"Error during self-analysis of logs: {e}")
         return {"error": str(e)}
+
 
 def main():
     """Main function to run the combined audit and self-analysis."""
@@ -279,6 +287,7 @@ def main():
 
     # Exit successfully
     sys.exit(0)
+
 
 if __name__ == "__main__":
     main()
