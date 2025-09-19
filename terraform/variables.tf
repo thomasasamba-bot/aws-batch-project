@@ -14,7 +14,6 @@ variable "region" {
 variable "s3_audit_bucket_name" {
   description = "The name of the S3 bucket where audit reports will be stored. Must be globally unique."
   type        = string
-  sensitive   = true
 }
 
 variable "batch_job_memory" {
@@ -32,4 +31,20 @@ variable "batch_job_vcpus" {
 variable "oidc_role_name" {
   description = "Name of the existing OIDC IAM role for AWS Batch"
   type        = string
+}
+
+variable "vpc_id" {
+  description = "VPC ID where resources will be deployed"
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "List of existing subnet IDs"
+  type        = list(string)
+}
+
+variable "use_existing_subnets" {
+  description = "Whether to use existing subnets or create new ones"
+  type        = bool
+  default     = false
 }
