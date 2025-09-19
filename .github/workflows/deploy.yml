@@ -41,11 +41,7 @@ jobs:
 
     - name: Install test dependencies
       run: |
-        if [ -f requirements-dev.txt ]; then
-          pip install -r requirements-dev.txt
-        else
-          pip install pytest==7.4.0 pytest-cov==4.1.0 flake8==6.0.0 moto==4.1.6
-        fi
+        pip install pytest==7.4.0 pytest-cov==4.1.0 flake8==6.0.0 moto==4.1.6
 
     - name: Run unit tests with coverage
       run: |
@@ -63,7 +59,8 @@ jobs:
         file: ./tests/unit/coverage.xml
         fail_ci_if_error: false
 
-    - name: Run security scanning
+    - name: Run security scanning (only on PRs)
+      if: github.event_name == 'pull_request'
       uses: actions/dependency-review-action@v3
       with:
         fail-on-severity: high
