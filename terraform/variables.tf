@@ -14,16 +14,27 @@ variable "region" {
 variable "s3_audit_bucket_name" {
   description = "The name of the S3 bucket where audit reports will be stored. Must be globally unique."
   type        = string
+  sensitive   = true # hide from CLI output
 }
 
 variable "batch_job_memory" {
   description = "The memory allocation (in MB) for the Fargate batch job."
   type        = number
-  default     = 512 # Free tier friendly, low memory for our script
+  default     = 2048 # Minimum for Fargate is 512MB, but 2GB is safer for Python
 }
 
 variable "batch_job_vcpus" {
   description = "The CPU allocation (in vCPUs) for the Fargate batch job."
   type        = number
-  default     = 0.25 # Free tier friendly, smallest possible unit
+  default     = 1 # Minimum for Fargate is 0.25 vCPU, but 1 is more reliable
+}
+
+variable "subnet_ids" {
+  description = "List of subnet IDs for the Batch compute environment"
+  type        = list(string)
+}
+
+variable "security_group_ids" {
+  description = "List of security group IDs for the Batch compute environment"
+  type        = list(string)
 }

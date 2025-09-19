@@ -121,24 +121,20 @@ resource "aws_iam_role_policy_attachment" "batch_ecr_power_user_attachment" {
 # Create the AWS Batch Compute Environment (Fargate)
 resource "aws_batch_compute_environment" "fargate_env" {
   compute_environment_name = "${var.project_name}-fargate-env"
+  type                     = "MANAGED"
+  state                    = "ENABLED"
+  service_role             = aws_iam_role.batch_job_execution_role.arn
 
   compute_resources {
-    type               = "FARGATE"
-    max_vcpus          = 4 # Low limit for cost control
-    security_group_ids = [] # Fargate manages this for us
-
-    subnets = [
-      # You need to provide your own subnet IDs here!
-      "subnet-08d766e89bbbd449d",
-      "subnet-0328f57cf5b66f44a"
-    ]
-
-    # Use FARGATE_SPOT for significant cost savings (up to 70%)
-    allocation_strategy = "BEST_FIT"
+    type       = "FARGATE"
+    max_vcpus  = 4
+    
+    # Remove allocation_strategy for Fargate - it's not supported
+    subnets = var.subnet_ids
+    
+    # Add security groups (required for networking)
+    security_group_ids = var.security_group_ids
   }
-
-  service_role = aws_iam_role.batch_job_execution_role.arn
-  type         = "MANAGED" # Let AWS manage the infrastructure
 
   depends_on = [aws_iam_role_policy_attachment.batch_ecr_power_user_attachment]
 
@@ -149,10 +145,15 @@ resource "aws_batch_compute_environment" "fargate_env" {
 
 # Create the AWS Batch Job Queue
 resource "aws_batch_job_queue" "auditor_queue" {
-  name                 = "${var.project_name}-queue"
-  state                = "ENABLED"
-  priority             = 1
-  compute_environments = [aws_batch_compute_environment.fargate_env.arn]
+  name     = "${var.project_name}-queue"
+  state    = "ENABLED"
+  priority = 1
+
+  # Use the new compute_environment_order format (old format is deprecated)
+  compute_environment_order {
+    compute_environment = aws_batch_compute_environment.fargate_env.arn
+    order               = 1
+  }
 
   tags = {
     Project = var.project_name
@@ -161,29 +162,34 @@ resource "aws_batch_job_queue" "auditor_queue" {
 
 # Create the AWS Batch Job Definition
 resource "aws_batch_job_definition" "ec2_auditor_job" {
-  name = "${var.project_name}-job-definition"
-  type = "container"
+  name                  = "${var.project_name}-job-definition"
+  type                  = "container"
   platform_capabilities = ["FARGATE"]
+  propagate_tags        = false
 
   # Parameters for the container
   container_properties = jsonencode({
-    image = "${aws_ecr_repository.batch_job_repo.repository_url}:latest" # Will point to the latest pushed image
+    image = "${aws_ecr_repository.batch_job_repo.repository_url}:latest"
     jobRoleArn = aws_iam_role.batch_job_execution_role.arn
     executionRoleArn = aws_iam_role.batch_job_execution_role.arn
     resourceRequirements = [
       {
         type  = "VCPU"
-        value = var.batch_job_vcpus
+        value = tostring(var.batch_job_vcpus)  # Convert to string
       },
       {
         type  = "MEMORY"
-        value = var.batch_job_memory
+        value = tostring(var.batch_job_memory) # Convert to string
       }
     ]
     environment = [
       {
         name  = "S3_BUCKET_NAME"
         value = aws_s3_bucket.audit_reports.id
+      },
+      {
+        name  = "AWS_REGION"
+        value = var.region
       }
     ]
     logConfiguration = {
