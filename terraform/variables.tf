@@ -28,13 +28,3 @@ variable "batch_job_vcpus" {
   type        = number
   default     = 1 # Minimum for Fargate is 0.25 vCPU, but 1 is more reliable
 }
-
-variable "subnet_ids" {
-  description = "List of subnet IDs for the Batch compute environment"
-  type        = list(string)
-}
-
-variable "security_group_ids" {
-  description = "List of security group IDs for the Batch compute environment"
-  type        = list(string)
-}

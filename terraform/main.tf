@@ -1,5 +1,37 @@
 # terraform/main.tf
 
+# Get the default VPC
+data "aws_vpc" "default" {
+  default = true
+}
+
+# Get available subnets in the default VPC
+data "aws_subnets" "available" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# Create a security group for the Batch jobs
+resource "aws_security_group" "batch_sg" {
+  name        = "${var.project_name}-batch-sg"
+  description = "Security group for AWS Batch jobs"
+  vpc_id      = data.aws_vpc.default.id
+
+  # Allow outbound traffic to anywhere (required for Batch jobs)
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
 # Create an S3 bucket for our audit reports
 resource "aws_s3_bucket" "audit_reports" {
   bucket = var.s3_audit_bucket_name
@@ -129,11 +161,9 @@ resource "aws_batch_compute_environment" "fargate_env" {
     type       = "FARGATE"
     max_vcpus  = 4
     
-    # Remove allocation_strategy for Fargate - it's not supported
-    subnets = var.subnet_ids
-    
-    # Add security groups (required for networking)
-    security_group_ids = var.security_group_ids
+    # Use the subnets and security group we created
+    subnets            = data.aws_subnets.available.ids
+    security_group_ids = [aws_security_group.batch_sg.id]
   }
 
   depends_on = [aws_iam_role_policy_attachment.batch_ecr_power_user_attachment]

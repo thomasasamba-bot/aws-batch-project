@@ -81,8 +81,6 @@ jobs:
     # Set environment variables for this job
     env:
       TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
-      TF_VAR_subnet_ids: ${{ secrets.TF_VAR_SUBNET_IDS }}
-      TF_VAR_security_group_ids: ${{ secrets.TF_VAR_SECURITY_GROUP_IDS }}
 
     steps:
     - name: Checkout code
