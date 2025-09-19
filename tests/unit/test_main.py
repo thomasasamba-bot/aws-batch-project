@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 project_root = os.path.join(os.path.dirname(__file__), '../..')
 sys.path.insert(0, project_root)
 
-# Now we can import from main
+# Import functions to test
 from src.main import check_security_groups, check_instance_utilization, generate_audit_report
 
 def test_check_security_groups():
@@ -21,7 +21,7 @@ def test_check_security_groups():
         'SecurityGroups': [{'GroupId': 'sg-12345678'}]
     }
     
-    # Mock security group rules response
+    # Mock security group rules response as a dictionary, not a Mock object
     mock_ec2.describe_security_group_rules.return_value = {
         'SecurityGroupRules': [
             {
@@ -78,9 +78,21 @@ def test_generate_audit_report():
         }
     ]
     
-    # Mock security group check to return no issues
-    with patch('main.check_security_groups', return_value=[]):
-        with patch('main.check_instance_utilization', return_value=[]):
+    # Mock the security group rules response as a dictionary
+    mock_security_response = {
+        'SecurityGroupRules': []  # Empty list means no security issues
+    }
+    
+    # Mock the describe_security_group_rules method to return our dictionary
+    mock_ec2.describe_security_group_rules.return_value = mock_security_response
+    
+    # Mock the individual check functions to return no issues
+    with patch('src.main.check_security_groups') as mock_security_check:
+        with patch('src.main.check_instance_utilization') as mock_utilization_check:
+            # Configure the mocks to return empty lists (no issues)
+            mock_security_check.return_value = []
+            mock_utilization_check.return_value = []
+            
             report = generate_audit_report(mock_ec2, instances)
             
             assert report['summary']['total_instances'] == 1

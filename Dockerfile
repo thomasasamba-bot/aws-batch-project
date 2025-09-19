@@ -8,7 +8,7 @@ WORKDIR /app
 COPY src/requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY src/ .
@@ -21,4 +21,4 @@ ENV AWS_REGION=us-east-1
 ENV PYTHONUNBUFFERED=1
 
 # Run the script when the container launches
-CMD ["python", "main.py"]
+CMD ["python3", "main.py"]

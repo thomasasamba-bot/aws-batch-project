@@ -31,7 +31,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'  # Match your Dockerfile Python version
+        python-version: '3.11'
 
     - name: Install production dependencies
       run: |
@@ -41,17 +41,21 @@ jobs:
 
     - name: Install test dependencies
       run: |
-        pip install pytest==7.4.0 pytest-cov==4.1.0 flake8==6.0.0 moto==4.1.6
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        else
+          pip install pytest==7.4.0 pytest-cov==4.1.0 flake8==6.0.0 moto==4.1.6
+        fi
 
     - name: Run unit tests with coverage
       run: |
         cd tests/unit
-        PYTHONPATH=../../src python -m pytest test_main.py -v --cov=src --cov-report=xml
+        PYTHONPATH=../.. python -m pytest test_main.py -v --cov=src --cov-report=xml
 
     - name: Run integration tests
       run: |
         cd tests/integration
-        PYTHONPATH=../../src python -m pytest test_integration.py -v
+        PYTHONPATH=../.. python -m pytest test_integration.py -v
 
     - name: Upload coverage reports
       uses: codecov/codecov-action@v3
