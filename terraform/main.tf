@@ -236,3 +236,100 @@ resource "aws_batch_job_definition" "ec2_auditor_job" {
     Project = var.project_name
   }
 }
+
+# Create CloudWatch Log Group for Batch jobs
+resource "aws_cloudwatch_log_group" "batch_jobs" {
+  name              = "/aws/batch/job"
+  retention_in_days = 30  # Keep logs for 30 days
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# Create CloudWatch Dashboard for monitoring
+resource "aws_cloudwatch_dashboard" "batch_auditor_dashboard" {
+  dashboard_name = "${var.project_name}-dashboard"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/Batch", "SubmittedJobs", "JobQueue", "${aws_batch_job_queue.auditor_queue.name}"],
+            [".", "SucceededJobs", ".", "."],
+            [".", "FailedJobs", ".", "."]
+          ]
+          period = 300
+          stat   = "Sum"
+          region = var.region
+          title  = "Batch Job Metrics"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/EC2", "CPUUtilization", "AutoScalingGroupName", "${var.project_name}-fargate-env"],
+            [".", "MemoryUtilization", ".", "."]
+          ]
+          period = 300
+          stat   = "Average"
+          region = var.region
+          title  = "Fargate Resource Utilization"
+        }
+      },
+      {
+        type   = "log"
+        x      = 0
+        y      = 6
+        width  = 24
+        height = 6
+        properties = {
+          region = var.region
+          title  = "Recent Batch Job Logs"
+          query  = <<EOF
+SOURCE '${aws_cloudwatch_log_group.batch_jobs.name}' | 
+fields @timestamp, @message |
+sort @timestamp desc |
+limit 20
+EOF
+          view   = "table"
+        }
+      }
+    ]
+  })
+}
+
+# CloudWatch Alarm for failed jobs
+resource "aws_cloudwatch_metric_alarm" "batch_job_failures" {
+  alarm_name          = "${var.project_name}-job-failures"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "FailedJobs"
+  namespace           = "AWS/Batch"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "This alarm triggers when AWS Batch jobs fail"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    JobQueue = aws_batch_job_queue.auditor_queue.name
+  }
+
+  alarm_actions = []  # Add SNS topic ARN here for notifications
+
+  tags = {
+    Project = var.project_name
+  }
+}
