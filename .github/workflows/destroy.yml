@@ -1,0 +1,47 @@
+# .github/workflows/destroy.yml
+name: Destroy AWS Batch Infrastructure
+
+on:
+  workflow_dispatch:   # manual trigger only
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  TERRAFORM_DIR: './terraform'
+
+jobs:
+  destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+
+    env:
+      TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
+      TF_VAR_subnet_ids: ${{ secrets.TF_VAR_SUBNET_IDS }}
+      TF_VAR_security_group_ids: ${{ secrets.TF_VAR_SECURITY_GROUP_IDS }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+        role-session-name: GitHubActions-Destroy
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    - name: Terraform Init
+      run: terraform init -input=false -reconfigure
+      working-directory: ${{ env.TERRAFORM_DIR }}
+
+    - name: Terraform Destroy
+      run: terraform destroy -auto-approve -input=false
+      working-directory: ${{ env.TERRAFORM_DIR }}
