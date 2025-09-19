@@ -14,17 +14,22 @@ variable "region" {
 variable "s3_audit_bucket_name" {
   description = "The name of the S3 bucket where audit reports will be stored. Must be globally unique."
   type        = string
-  sensitive   = true # hide from CLI output
+  sensitive   = true
 }
 
 variable "batch_job_memory" {
   description = "The memory allocation (in MB) for the Fargate batch job."
   type        = number
-  default     = 2048 # Minimum for Fargate is 512MB, but 2GB is safer for Python
+  default     = 2048
 }
 
 variable "batch_job_vcpus" {
   description = "The CPU allocation (in vCPUs) for the Fargate batch job."
   type        = number
-  default     = 1 # Minimum for Fargate is 0.25 vCPU, but 1 is more reliable
+  default     = 1
+}
+
+variable "oidc_role_name" {
+  description = "Name of the existing OIDC IAM role for AWS Batch"
+  type        = string
 }
