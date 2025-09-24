@@ -33,15 +33,15 @@ variable "oidc_role_name" {
   type        = string
 }
 
-variable "vpc_id" {
-  description = "VPC ID where resources will be deployed"
-  type        = string
-}
+#variable "vpc_id" {
+#  description = "VPC ID where resources will be deployed"
+#  type        = string
+#}
 
-variable "subnet_ids" {
-  description = "List of existing subnet IDs"
-  type        = list(string)
-}
+#variable "subnet_ids" {
+#  description = "List of existing subnet IDs"
+#  type        = list(string)
+#}
 
 variable "use_existing_subnets" {
   description = "Whether to use existing subnets or create new ones"

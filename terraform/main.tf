@@ -20,13 +20,6 @@ resource "aws_security_group" "batch_sg" {
   vpc_id      = data.aws_vpc.default.id
 
   # Allow outbound traffic to anywhere (required for Batch jobs)
-  ingress {
-      from_port   = 0
-      to_port     = 0
-      protocol    = "-1"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
-
   egress {
     from_port   = 0
     to_port     = 0

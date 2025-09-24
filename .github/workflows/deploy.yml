@@ -78,76 +78,86 @@ jobs:
     environment: production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    # Set environment variables for this job
+  # Set environment variables for this job - FIXED SYNTAX
     env:
-      TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
-      TF_VAR_oidc_role_name: ${{ secrets.AWS_OIDC_ROLE_NAME }}
+      AWS_REGION: us-east-1
+      TERRAFORM_DIR: './terraform'
+      ECR_REPOSITORY: 'aws-batch-auditor-repo'
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
-        aws-region: ${{ env.AWS_REGION }}
-        role-session-name: GitHubActions-Deploy
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Deploy
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.6.0
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
 
-    - name: Terraform Init
-      run: terraform init
-      working-directory: ${{ env.TERRAFORM_DIR }}
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        env:
+          TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
+          TF_VAR_oidc_role_name: ${{ secrets.AWS_OIDC_ROLE_NAME }}
 
-    - name: Terraform Plan
-      run: terraform plan -input=false
-      working-directory: ${{ env.TERRAFORM_DIR }}
+      - name: Terraform Plan
+        run: terraform plan -input=false
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        env:
+          TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
+          TF_VAR_oidc_role_name: ${{ secrets.AWS_OIDC_ROLE_NAME }}
 
-    - name: Terraform Apply
-      run: terraform apply -auto-approve -input=false
-      working-directory: ${{ env.TERRAFORM_DIR }}
-     
-    - name: Get Terraform outputs
-      id: terraform-outputs
-      run: |
-        echo "repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
-        echo "batch_job_definition=$(terraform output -raw batch_job_definition_name)" >> $GITHUB_OUTPUT
-        echo "batch_job_queue=$(terraform output -raw batch_job_queue_name)" >> $GITHUB_OUTPUT
-        echo "s3_bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
-      working-directory: ${{ env.TERRAFORM_DIR }}
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -input=false
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        env:
+          TF_VAR_s3_audit_bucket_name: ${{ secrets.TF_VAR_S3_AUDIT_BUCKET_NAME }}
+          TF_VAR_oidc_role_name: ${{ secrets.AWS_OIDC_ROLE_NAME }}
+      
+      - name: Get Terraform outputs
+        id: terraform-outputs
+        run: |
+          echo "repository_url=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+          echo "batch_job_definition=$(terraform output -raw batch_job_definition_name)" >> $GITHUB_OUTPUT
+          echo "batch_job_queue=$(terraform output -raw batch_job_queue_name)" >> $GITHUB_OUTPUT
+          echo "s3_bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
+        working-directory: ${{ env.TERRAFORM_DIR }}
 
-    - name: Login to Amazon ECR
-      uses: aws-actions/amazon-ecr-login@v2
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Build, Tag, and Push Docker image
-      run: |
-        docker build -t ${{ steps.terraform-outputs.outputs.repository_url }}:latest .
-        docker tag ${{ steps.terraform-outputs.outputs.repository_url }}:latest ${{ steps.terraform-outputs.outputs.repository_url }}:${{ github.sha }}
-        docker push ${{ steps.terraform-outputs.outputs.repository_url }}:latest
-        docker push ${{ steps.terraform-outputs.outputs.repository_url }}:${{ github.sha }}
+      - name: Build, Tag, and Push Docker image
+        run: |
+          docker build -t ${{ steps.terraform-outputs.outputs.repository_url }}:latest .
+          docker tag ${{ steps.terraform-outputs.outputs.repository_url }}:latest ${{ steps.terraform-outputs.outputs.repository_url }}:${{ github.sha }}
+          docker push ${{ steps.terraform-outputs.outputs.repository_url }}:latest
+          docker push ${{ steps.terraform-outputs.outputs.repository_url }}:${{ github.sha }}
 
-    - name: Submit Test Job to AWS Batch
-      run: |
-        aws batch submit-job \
-          --job-name "test-job-${GITHUB_SHA:0:8}" \
-          --job-queue "${{ steps.terraform-outputs.outputs.batch_job_queue }}" \
-          --job-definition "${{ steps.terraform-outputs.outputs.batch_job_definition }}" \
-          --region ${{ env.AWS_REGION }} \
-          --container-overrides '{"environment": [{"name": "S3_BUCKET_NAME", "value": "${{ steps.terraform-outputs.outputs.s3_bucket }}"}]}'
-      continue-on-error: true
+      - name: Submit Test Job to AWS Batch
+        run: |
+          aws batch submit-job \
+            --job-name "test-job-${GITHUB_SHA:0:8}" \
+            --job-queue "${{ steps.terraform-outputs.outputs.batch_job_queue }}" \
+            --job-definition "${{ steps.terraform-outputs.outputs.batch_job_definition }}" \
+            --region ${{ env.AWS_REGION }} \
+            --container-overrides '{"environment": [{"name": "S3_BUCKET_NAME", "value": "${{ steps.terraform-outputs.outputs.s3_bucket }}"}]}'
+        continue-on-error: true
 
-    - name: Verify test job status
-      if: always()
-      run: |
-        # Wait a bit for the job to start
-        sleep 30
-        # Check if the test job completed successfully
-        JOB_STATUS=$(aws batch describe-jobs --jobs "test-job-${GITHUB_SHA:0:8}" --region ${{ env.AWS_REGION }} --query 'jobs[0].status' --output text)
-        echo "Test job status: $JOB_STATUS"
-        if [ "$JOB_STATUS" != "SUCCEEDED" ]; then
-          exit 1
-        fi
+      - name: Verify test job status
+        if: always()
+        run: |
+          # Wait a bit for the job to start
+          sleep 30
+          # Check if the test job completed successfully
+          JOB_STATUS=$(aws batch describe-jobs --jobs "test-job-${GITHUB_SHA:0:8}" --region ${{ env.AWS_REGION }} --query 'jobs[0].status' --output text)
+          echo "Test job status: $JOB_STATUS"
+          if [ "$JOB_STATUS" != "SUCCEEDED" ]; then
+            exit 1
+          fi
