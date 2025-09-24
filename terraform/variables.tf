@@ -1,4 +1,3 @@
-# terraform/variables.tf
 variable "project_name" {
   description = "Name of the project, used for resource naming and tagging."
   type        = string
@@ -31,20 +30,4 @@ variable "batch_job_vcpus" {
 variable "oidc_role_name" {
   description = "Name of the existing OIDC IAM role for AWS Batch"
   type        = string
-}
-
-#variable "vpc_id" {
-#  description = "VPC ID where resources will be deployed"
-#  type        = string
-#}
-
-#variable "subnet_ids" {
-#  description = "List of existing subnet IDs"
-#  type        = list(string)
-#}
-
-variable "use_existing_subnets" {
-  description = "Whether to use existing subnets or create new ones"
-  type        = bool
-  default     = false
 }
